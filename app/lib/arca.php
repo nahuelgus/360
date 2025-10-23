@@ -81,7 +81,14 @@ class ArcaClient {
                         WHERE s.id = ?", [$sale_id]);
         if (!$sale) throw new RuntimeException('Venta no encontrada');
 
-        if (strtoupper((string)($sale['doc_type'] ?? '')) !== 'INVOICE') throw new RuntimeException('La venta no es de tipo Factura');
+        // ==================================================================
+        // *** ESTA ES LA LÍNEA CORREGIDA ***
+        // Se cambió $sale['doc_mode'] por $sale['doc_type'] para coincidir con la base de datos
+        if (strtoupper((string)($sale['doc_type'] ?? '')) !== 'INVOICE') {
+             throw new RuntimeException('La venta no es de tipo Factura');
+        }
+        // ==================================================================
+
         $letter = in_array($sale['cbte_letter'], ['A','B','C']) ? $sale['cbte_letter'] : 'B';
 
         $items = DB::all("SELECT si.*, p.name AS product_name, p.barcode FROM sale_items si JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?", [$sale_id]);
@@ -107,13 +114,12 @@ class ArcaClient {
 
         // ==== REST por API KEY/SECRET (Mantenido) ====
         if (!empty($this->api_key) && !empty($this->api_secret)) {
-            // (Tu lógica REST original se mantiene aquí por si la usas en el futuro)
             $err = 'El modo REST (api_key) no está implementado para la facturación SOAP.';
             $this->updateSaleArca($sale_id, 'error', ['arca_error'=>$err]);
             throw new RuntimeException($err);
         }
 
-        // ==== WSAA → WSFE (token/sign) (SECCIÓN **ACTUALIZADA Y CORREGIDA**) ====
+        // ==== WSAA → WSFE (token/sign) (SECCIÓN ACTUALIZADA Y CORREGIDA) ====
         $socCUIT = preg_replace('/\\D+/', '', (string)($sale['soc_tax_id'] ?? ''));
         if (!$socCUIT) throw new RuntimeException('CUIT de la sociedad vacío');
 
@@ -132,7 +138,6 @@ class ArcaClient {
         $cbteTipo = $this->mapCbteTipo($letter);
         $lastVoucherSoap = $this->buildFECompUltimoAutorizadoEnvelope($ta, $socCUIT, $this->pos_number, $cbteTipo);
         
-        // Usamos tu `soapCall`, pero apuntando al Action correcto de SOAP 1.2
         $lastVoucherResp = $this->soapCall($wsfeUrl, $lastVoucherSoap, 'http://ar.gov.afip.dif.wsfev1/FECompUltimoAutorizado');
         
         $lastVoucherNum = (int)$this->findTag($lastVoucherResp, 'CbteNro');
