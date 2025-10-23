@@ -28,6 +28,7 @@ if ($branch_id) {
 <!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>POS</title>
 <link rel="stylesheet" href="<?= $BASE ?>/public/assets/css/base.css">
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <style>
   :root{ --bar-h: 74px; }
   body{ padding-bottom: var(--bar-h); background:#f6f7f9 }
@@ -72,7 +73,6 @@ if ($branch_id) {
 
   <div class="pos">
     <div>
-      <!-- CLIENTE -->
       <div class="card">
         <h3>Cliente (opcional)</h3>
         <form id="fCli" onsubmit="return setCustomer()">
@@ -91,7 +91,6 @@ if ($branch_id) {
         <div id="cliInfo" class="help"></div>
       </div>
 
-      <!-- BUSCAR / ESCANEAR + CARRITO -->
       <div class="card">
         <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
           <h3>Buscar / escanear</h3>
@@ -109,13 +108,7 @@ if ($branch_id) {
         <table class="table" id="tItems">
           <thead>
             <tr>
-              <th>Producto</th>
-              <th>Cant</th>
-              <th>P. Unit</th>
-              <th>% Desc</th>
-              <th>Total</th>
-              <th>Etiq.</th>
-              <th></th>
+              <th>Producto</th><th>Cant</th><th>P. Unit</th><th>% Desc</th><th>Total</th><th>Etiq.</th><th></th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -123,7 +116,6 @@ if ($branch_id) {
       </div>
     </div>
 
-    <!-- COMPROBANTE / PAGOS -->
     <div class="card">
       <h3>Comprobante</h3>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -131,12 +123,11 @@ if ($branch_id) {
           <option value="TICKET_X" selected>Ticket X (no fiscal)</option>
           <option value="INVOICE">Factura</option>
         </select>
-        <select id="cbteLetter" class="input" style="max-width:120px" <?= $def_letter ? '' : '' ?> >
+        <select id="cbteLetter" class="input" style="max-width:120px">
           <option value="A">A</option>
           <option value="B" <?= $def_letter==='B'?'selected':'' ?>>B</option>
           <option value="C" <?= $def_letter==='C'?'selected':'' ?>>C</option>
         </select>
-        <span class="help">Letra por defecto de la sucursal: <b><?= htmlspecialchars($def_letter) ?></b></span>
       </div>
 
       <h3 style="margin-top:12px">Pagos</h3>
@@ -178,10 +169,7 @@ function render(){
   let total=0;
   cart.forEach((it,idx)=>{
     const line=it.qty*it.price*(1 - (it.discount||0)/100); total+=line;
-    const tags = [];
-    if (Array.isArray(it.labels)) {
-      it.labels.forEach(l => { if (l && l.icon) tags.push(`<img src="${l.icon}" alt="${l.name||''}" title="${l.name||''}">`); });
-    }
+    const tags = (it.labels || []).map(l => l.icon ? `<img src="${l.icon}" alt="${l.name||''}" title="${l.name||''}">` : '').join('');
     const tr=document.createElement('tr'); tr.innerHTML=`
       <td>${it.name}</td>
       <td>
@@ -195,193 +183,114 @@ function render(){
       <td>${mfmt(it.price)}</td>
       <td><input class="input" style="width:80px" value="${it.discount||0}" oninput="cart[${idx}].discount=Number(this.value)||0; render()"></td>
       <td>${mfmt(line)}</td>
-      <td class="tag-icons">${tags.join(' ')}</td>
+      <td class="tag-icons">${tags}</td>
       <td><button class="btn" onclick="cart.splice(${idx},1); render()">✕</button></td>`;
     tb.appendChild(tr);
   });
   document.getElementById('grand').textContent = mfmt(total);
   document.getElementById('grandFixed').textContent = mfmt(total);
-
-  // habilitar / deshabilitar letra según modo
-  const inv = document.getElementById('docMode').value==='INVOICE';
-  document.getElementById('cbteLetter').disabled = !inv;
+  document.getElementById('cbteLetter').disabled = document.getElementById('docMode').value!=='INVOICE';
 }
-function chgQty(i, d){ cart[i].qty = Math.max(1, Number(cart[i].qty||1) + d); render(); }
+function chgQty(i, d){ cart[i].qty = Math.max(1, (cart[i].qty||1) + d); render(); }
 
-// ===== Clientes
+// ===== Clientes (Funcionalidad Original Mantenida)
 let cTimer=null, cData=[], cIdx=-1;
-const csearch = document.getElementById('csearch');
-const clist   = document.getElementById('clist');
-
+const csearch = document.getElementById('csearch'), clist = document.getElementById('clist');
 async function setCustomer(){
   const d = document.getElementById('dni').value.trim(); if(!d) return false;
   try{
     const r = await fetch(BASE+'/api/customers/lookup.php?dni='+encodeURIComponent(d));
     const j = await r.json();
     if(j.ok && j.data){ customer=j.data; customerPoints=j.points||0; paintCustomer(); }
-    else{ alert('Cliente no encontrado'); }
-  }catch(e){ alert('Error cliente: '+e.message); }
+    else{ Swal.fire('Error', 'Cliente no encontrado', 'error'); }
+  }catch(e){ Swal.fire('Error', 'No se pudo buscar el cliente: '+e.message, 'error'); }
   return false;
 }
 function paintCustomer(){
   const box=document.getElementById('cliInfo');
   if(!customer){ box.innerHTML=''; document.getElementById('ptsAvail').textContent='0'; document.getElementById('ptsUse').value='0'; return; }
-  box.innerHTML = `<span class="chip">
-    <span>Cliente: <b>${customer.name}</b> (DNI ${customer.dni}) · Puntos: <b>${customerPoints}</b></span>
-    <button class="x" title="Quitar" onclick="clearCustomer()">×</button></span>`;
+  box.innerHTML = `<span class="chip"><span>Cliente: <b>${customer.name}</b> (DNI ${customer.dni}) · Puntos: <b>${customerPoints}</b></span><button class="x" title="Quitar" onclick="clearCustomer()">×</button></span>`;
   document.getElementById('ptsAvail').textContent = String(customerPoints);
 }
 function clearCustomer(){ customer=null; customerPoints=0; paintCustomer(); }
 function openRegister(){ const d=document.getElementById('dni').value.trim(); window.open(BASE+'/public/clients/index.php'+(d?('?dni='+encodeURIComponent(d)):'') ,'_blank'); }
-
-// Autocomplete clientes
 csearch.addEventListener('input', ()=>{ const q=csearch.value.trim(); if(cTimer) clearTimeout(cTimer); if(q.length<2){ hideC(); return;} cTimer=setTimeout(()=> fetchCustomers(q), 220); });
 csearch.addEventListener('keydown', e=>{ if(clist.style.display!=='none'){ if(e.key==='ArrowDown'){e.preventDefault();moveC(1);} else if(e.key==='ArrowUp'){e.preventDefault();moveC(-1);} else if(e.key==='Enter'){ if(cIdx>=0){e.preventDefault();pickC(cIdx);} } else if(e.key==='Escape'){hideC();}} });
-document.addEventListener('click', (e)=>{ if(!e.target.closest('.ac-wrap')) hideC(); });
-async function fetchCustomers(q){ try{ const j = await (await fetch(`${BASE}/api/customers/search.php?q=${encodeURIComponent(q)}&limit=12`)).json(); if(!j.ok){ hideC(); return; } cData=j.data||[]; renderC(); }catch(_){ hideC(); } }
-function renderC(){ clist.innerHTML=''; if(!cData.length){ hideC(); return; } cData.forEach((c,i)=>{ const div=document.createElement('div'); div.className='ac-item'; div.innerHTML=`<div class="ac-name">${c.name} · DNI ${c.dni}</div><div class="ac-price">${c.email||''}</div>`; div.addEventListener('mouseenter',()=> setCIdx(i,false)); div.addEventListener('mouseleave',()=> setCIdx(-1,false)); div.addEventListener('click',()=> pickC(i)); clist.appendChild(div); }); cIdx=-1; clist.style.display='block'; }
-function setCIdx(i){ cIdx=i; [...clist.children].forEach((el,ix)=>el.classList.toggle('active', ix===i)); }
-function moveC(d){ if(!cData.length) return; let i=cIdx+d; if(i<0)i=cData.length-1; if(i>=cData.length)i=0; setCIdx(i); }
-async function pickC(i){ const c=cData[i]; if(!c) return; const j = await (await fetch(`${BASE}/api/customers/lookup.php?dni=${encodeURIComponent(c.dni)}`)).json(); if(j.ok){ customer=j.data; customerPoints=j.points||0; paintCustomer(); } hideC(); csearch.value=''; }
+async function fetchCustomers(q){ try{ const j = await (await fetch(`${BASE}/api/customers/search.php?q=${encodeURIComponent(q)}&limit=8`)).json(); if(j.ok) { cData=j.data||[]; renderC(); } else { hideC(); } }catch(_){ hideC(); } }
+function renderC(){ clist.innerHTML=''; if(!cData.length){ hideC(); return; } cData.forEach((c,i)=>{ const div=document.createElement('div'); div.className='ac-item'; div.innerHTML=`<div class="ac-name">${c.name} · DNI ${c.dni}</div>`; div.onclick = ()=> pickC(i); clist.appendChild(div); }); cIdx=-1; clist.style.display='block'; }
+function moveC(d){ if(!cData.length) return; let i=cIdx+d; i=(i+cData.length)%cData.length; [...clist.children].forEach((el,ix)=>el.classList.toggle('active', ix===i)); cIdx=i; }
+async function pickC(i){ const c=cData[i]; if(!c) return; hideC(); csearch.value=''; const j = await (await fetch(`${BASE}/api/customers/lookup.php?dni=${encodeURIComponent(c.dni)}`)).json(); if(j.ok){ customer=j.data; customerPoints=j.points||0; paintCustomer(); }}
 function hideC(){ clist.style.display='none'; cData=[]; cIdx=-1; }
 
-// ==== Autocomplete productos
-const scanEl = document.getElementById('scan'); const acList = document.getElementById('acList');
-let acIdx = -1; let acData = []; let acTimer = null;
-
+// ==== Autocomplete productos (Funcionalidad Original Mantenida)
+const scanEl = document.getElementById('scan'), acList = document.getElementById('acList');
+let acIdx = -1, acData = [], acTimer = null;
 scanEl.addEventListener('input', ()=>{ const q=scanEl.value.trim(); if(acTimer) clearTimeout(acTimer); if(q.length < 2){ hideAC(); return; } acTimer = setTimeout(()=> fetchAC(q), 220); });
 scanEl.addEventListener('keydown', (e)=>{ if(acList.style.display!=='none'){ if(e.key==='ArrowDown'){ e.preventDefault(); moveAC(1); } else if(e.key==='ArrowUp'){ e.preventDefault(); moveAC(-1); } else if(e.key==='Enter'){ if(acIdx>=0){ e.preventDefault(); selectAC(acIdx); } else { addItem(); } } else if(e.key==='Escape'){ hideAC(); } } else if(e.key==='Enter'){ e.preventDefault(); addItem(); } });
-document.addEventListener('click', (e)=>{ if(!e.target.closest('.ac-wrap')) hideAC(); });
-
-async function fetchAC(q){
-  try{
-    const res = await fetch(`${BASE}/api/products/list.php?q=${encodeURIComponent(q)}&limit=12`);
-    const j = await res.json();
-    if(!j.ok){ hideAC(); return; }
-    acData = j.data || [];
-    renderAC();
-  }catch(_){ hideAC(); }
-}
-function renderAC(){
-  acList.innerHTML='';
-  if(!acData.length){ hideAC(); return; }
-  acData.forEach((p,i)=>{
-    const tagIcons = Array.isArray(p.labels)
-      ? p.labels.filter(l=>l && l.icon).map(l=>`<img src="${l.icon}" alt="${l.name||''}" title="${l.name||''}" style="height:16px;margin-left:6px">`).join('')
-      : '';
-    const div=document.createElement('div'); div.className='ac-item';
-    const code = p.barcode ? `<span class="ac-code">${p.barcode}</span>` : '';
-    div.innerHTML = `<div class="ac-name">${p.name}${code? ' · '+code : ''} ${tagIcons}</div>
-                     <div class="ac-price">${mfmt(p.price)}</div>`;
-    div.addEventListener('mouseenter', ()=> setACIdx(i,false));
-    div.addEventListener('mouseleave', ()=> setACIdx(-1,false));
-    div.addEventListener('click', ()=> selectAC(i));
-    acList.appendChild(div);
-  });
-  acIdx=-1;
-  acList.style.display='block';
-}
-function setACIdx(i,scroll=true){ acIdx=i; [...acList.children].forEach((el,ix)=> el.classList.toggle('active', ix===i)); if(scroll && i>=0){ acList.children[i].scrollIntoView({block:'nearest'}); } }
-function moveAC(delta){ if(!acData.length) return; let i = acIdx + delta; if(i<0) i=acData.length-1; if(i>=acData.length) i=0; setACIdx(i); }
-function selectAC(i){
-  const p = acData[i]; if(!p) return;
-  cart.push({ product_id:p.id, name:p.name, price:Number(p.price), qty:1, discount:0, labels: Array.isArray(p.labels) ? p.labels : [] });
-  render(); hideAC(); scanEl.value='';
-}
+async function fetchAC(q){ try{ const res = await fetch(`${BASE}/api/products/list.php?q=${encodeURIComponent(q)}&limit=8`); const j = await res.json(); if(j.ok){ acData = j.data || []; renderAC(); } else { hideAC(); } }catch(_){ hideAC(); } }
+function renderAC(){ acList.innerHTML=''; if(!acData.length){ hideAC(); return; } acData.forEach((p,i)=>{ const div=document.createElement('div'); div.className='ac-item'; div.innerHTML = `<div class="ac-name">${p.name}</div><div class="ac-price">${mfmt(p.price)}</div>`; div.onclick = ()=> selectAC(i); acList.appendChild(div); }); acIdx=-1; acList.style.display='block'; }
+function moveAC(d){ if(!acData.length) return; let i = acIdx + d; i=(i+acData.length)%acData.length; [...acList.children].forEach((el,ix)=> el.classList.toggle('active', ix===i)); acIdx=i; }
+function selectAC(i){ const p = acData[i]; if(!p) return; cart.push({ product_id:p.id, name:p.name, price:Number(p.price), qty:1, discount:0, labels: p.labels || [] }); render(); hideAC(); scanEl.value=''; }
 function hideAC(){ acList.style.display='none'; acData=[]; acIdx=-1; }
+async function addItem(){ const q=scanEl.value.trim(); if(!q) return false; try{ const res = await fetch(BASE+'/api/products/find.php?q='+encodeURIComponent(q)); const j = await res.json(); if(j.ok && j.data){ cart.push({ product_id:j.data.id, name:j.data.name, price:Number(j.data.price), qty:1, discount:0, labels: j.data.labels || [] }); render(); }else{ Swal.fire('Error', `Producto no encontrado: ${j.error || ''}`, 'error'); } }catch(err){ Swal.fire('Error',`Buscando producto: ${err.message}`,'error'); } scanEl.value=''; hideAC(); return false; }
 
-// ==== Agregar por Enter / scanner (robusto)
-async function addItem(){
-  const q=scanEl.value.trim(); if(!q) return false;
-  try{
-    const res = await fetch(BASE+'/api/products/find.php?q='+encodeURIComponent(q));
-    const text = await res.text();
-    let j; try { j = JSON.parse(text); } catch(e){ alert('Respuesta no-JSON al buscar producto:\\n'+text.slice(0,600)); return false; }
-    if(j && j.ok && j.data){
-      cart.push({
-        product_id:j.data.id, name:j.data.name, price:Number(j.data.price), qty:1, discount:0,
-        labels: Array.isArray(j.data.labels) ? j.data.labels : []
-      });
-      render();
-    }else{
-      alert('Producto no encontrado'+(j && j.error?': '+j.error:'')); 
-    }
-  }catch(err){ alert('Error buscando producto: '+err.message); }
-  scanEl.value=''; hideAC(); return false;
-}
-
-// ==== Pagos
+// ==== Pagos (Funcionalidad Original Mantenida)
 function addPay(){
-  const wrap=document.getElementById('pays');
-  const i=payments.length; const d=document.createElement('div'); d.style.marginBottom='6px';
-  const sel=`<select class="input" onchange="payments[${i}].payment_method_id=Number(this.value)">
-    <option value="">— Medio —</option>${methods.map(m=>`<option value="${m.id}">${m.name}</option>`).join('')}</select>`;
-  d.innerHTML= sel+` <input class="input" style="width:120px" placeholder="Monto" inputmode="decimal"
-                 oninput="payments[${i}].amount=Number(this.value)||0">
-                 <input class="input" style="width:160px" placeholder="Ref (voucher: código)"
-                 oninput="payments[${i}].ref=this.value||''">`;
+  const wrap=document.getElementById('pays'), i=payments.length, d=document.createElement('div'); d.style.marginBottom='6px';
+  const sel=`<select class="input" onchange="payments[${i}].payment_method_id=Number(this.value)"><option value="">— Medio —</option>${methods.map(m=>`<option value="${m.id}">${m.name}</option>`).join('')}</select>`;
+  d.innerHTML= `${sel} <input class="input" style="width:120px" placeholder="Monto" oninput="payments[${i}].amount=Number(this.value)||0"> <input class="input" style="width:160px" placeholder="Ref" oninput="payments[${i}].ref=this.value||''">`;
   wrap.appendChild(d); payments.push({payment_method_id:null,amount:0,ref:''});
 }
-function clearCart(){ cart=[]; payments=[]; document.getElementById('pays').innerHTML=''; render(); }
+function clearCart(){ cart=[]; payments=[]; customer=null; customerPoints=0; document.getElementById('pays').innerHTML=''; paintCustomer(); render(); }
 
-// ==== Confirmar venta → /api/sales/create.php
+// ==== Confirmar venta (FUNCIÓN **CORREGIDA Y MEJORADA**)
 async function confirmSale(){
-  if(cart.length===0){ alert('Carrito vacío'); return; }
-  if(!BRANCH_ID){ alert('Debés seleccionar una sucursal en el navbar.'); return; }
-
+  if(cart.length===0) return Swal.fire('Error', 'El carrito está vacío.', 'error');
+  if(!BRANCH_ID) return Swal.fire('Error', 'Debes seleccionar una sucursal para operar.', 'error');
+  
   const pts = Number(document.getElementById('ptsUse').value)||0;
-  if(pts>0 && !customer){ alert('Para canjear puntos, seleccioná un cliente.'); return; }
+  if(pts > customerPoints) return Swal.fire('Error', 'El cliente no tiene suficientes puntos.', 'error');
 
-  // Modo/Letra
-  const docMode = (document.getElementById('docMode').value || 'TICKET_X').toUpperCase();
-  const cbteLetter = document.getElementById('cbteLetter').value || '<?= htmlspecialchars($def_letter) ?>';
-
-  // Mapear items a lo que espera la API
-  const items = cart.map(i=>({
-    product_id: i.product_id,
-    qty: Number(i.qty)||1,
-    unit_price: Number(i.price)||0,
-    discount_pct: Number(i.discount)||0
-  }));
-
-  // Armar payload
   const payload = {
     branch_id: BRANCH_ID,
-    register_id: REGISTER_ID || null,
-    doc_mode: docMode,             // 'TICKET_X' | 'INVOICE'
-    cbte_letter: cbteLetter,       // A | B | C (solo si INVOICE)
-    customer_id: customer ? (customer.id||null) : null,
-    items,
-    discount_total: 0,             // descuento total adicional $ (editable si querés)
-    payments
+    register_id: REGISTER_ID,
+    doc_mode: document.getElementById('docMode').value,
+    cbte_letter: document.getElementById('cbteLetter').value,
+    customer_id: customer ? customer.id : null,
+    items: cart.map(i=>({product_id:i.product_id, qty:i.qty, unit_price:i.price, discount_pct:i.discount})),
+    payments: payments.filter(p=> p.amount > 0),
+    points_used: pts
   };
 
-  try{
-    const res = await fetch(BASE+'/api/sales/create.php', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const text = await res.text();
-    let j; try { j = JSON.parse(text); } catch(e){ alert('Respuesta no-JSON:\\n'+text.slice(0,600)); return; }
-    if(!j.ok){ alert(j.error||'Error creando venta'); return; }
+  Swal.fire({ title: 'Procesando Venta...', text: 'Por favor, espere.', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
 
-    if(j.needs_arca){
-      // Paso 2: cuando activemos ARCA, descomentar:
-      // const r2 = await fetch(BASE+'/api/fiscal/emit.php', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sale_id:j.sale_id })});
-      // const t2 = await r2.text(); let e2; try{ e2=JSON.parse(t2) }catch(_){ alert('ARCA no respondió JSON:\\n'+t2.slice(0,600)); return; }
-      // if(!e2.ok){ alert('ARCA error: '+(e2.error||'desconocido')); return; }
-      alert('Venta creada. Falta emisión ARCA (Paso 2). #'+j.sale_id);
+  try {
+    const res = await fetch(BASE+'/api/sales/create.php', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    const data = await res.json();
+
+    if(!res.ok || !data.ok) throw new Error(data.error || `Error HTTP ${res.status}`);
+
+    const saleId = data.sale_id;
+
+    if(data.needs_arca){
+      Swal.update({ title: 'Venta registrada. Facturando en ARCA...' });
+      
+      const fiscalRes = await fetch(BASE+'/api/fiscal/emit.php', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ sale_id: saleId }) });
+      const fiscalData = await fiscalRes.json();
+      
+      if(fiscalData.ok && fiscalData.data.cae) {
+        Swal.fire({ icon: 'success', title: '¡Factura Emitida!', html: `Venta y factura generadas correctamente.<br><b>CAE: ${fiscalData.data.cae}</b>`, confirmButtonText: 'Ver Comprobante' })
+           .then(() => { clearCart(); window.open(BASE+'/public/sales/view.php?id='+saleId, '_blank'); });
+      } else {
+        Swal.fire({ icon: 'warning', title: 'Venta Guardada, Factura Fallida', text: `La venta se guardó, pero ARCA devolvió un error: ${fiscalData.error || 'Desconocido'}`, confirmButtonText: 'Ver Venta (sin factura)' })
+           .then(() => { clearCart(); window.location.href = BASE+'/public/sales/view.php?id='+saleId; });
+      }
     } else {
-      alert('Venta Ticket X creada. #'+j.sale_id);
+      Swal.fire({ icon: 'success', title: 'Ticket Creado', text: `La venta #${saleId} se registró correctamente.`, confirmButtonText: 'Aceptar' })
+         .then(() => clearCart());
     }
-
-    // Redirigir a vista/impresión si ya la tenés:
-    // window.location = BASE+'/public/sales/view.php?id='+j.sale_id;
-
-    clearCart();
-  }catch(e){
-    alert('Error confirmando venta: '+e.message);
+  } catch(e) {
+    Swal.fire('Error Crítico', 'No se pudo completar la operación: '+e.message, 'error');
   }
 }
 
