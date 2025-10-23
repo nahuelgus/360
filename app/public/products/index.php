@@ -19,27 +19,14 @@ function hasCol($t,$c){
 /* Categorías */
 $cats = safeAll("SELECT id,name FROM product_categories WHERE is_active=1 ORDER BY name");
 
-/* Etiquetas: preferimos product_labels (icon_path), si no, labels (icon_url/icon) */
-$labels = [];
-$labelTable = null; $iconCol = null;
-if (hasTable('product_labels')) {
-  $labelTable = 'product_labels';
-  $iconCol = hasCol('product_labels','icon_path') ? 'icon_path' : (hasCol('product_labels','icon') ? 'icon' : null);
-  $sel = "id,name".($iconCol? ",$iconCol AS icon" : "");
-  $labels = safeAll("SELECT $sel FROM product_labels ORDER BY name");
-} elseif (hasTable('labels')) {
-  $labelTable = 'labels';
-  if     (hasCol('labels','icon_url')) $iconCol='icon_url';
-  elseif (hasCol('labels','icon'))     $iconCol='icon';
-  elseif (hasCol('labels','image'))    $iconCol='image';
-  $sel = "id,name".($iconCol? ",$iconCol AS icon" : "");
-  $labels = safeAll("SELECT $sel FROM labels ORDER BY name");
-}
+/* Etiquetas */
+$labels = safeAll("SELECT id,name,icon_path AS icon FROM product_labels ORDER BY name");
 ?>
 <!doctype html><html lang="es"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Productos</title>
 <link rel="stylesheet" href="<?= $BASE ?>/public/assets/css/base.css">
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 <style>
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   @media (max-width:1000px){ .grid{grid-template-columns:1fr} }
@@ -56,7 +43,7 @@ if (hasTable('product_labels')) {
 <div class="container">
   <div class="card">
     <h3>Producto</h3>
-    <form id="fProd" onsubmit="return saveProd()">
+    <form id="fProd">
       <div class="grid">
         <div>
           <div class="hint">SKU interno</div>
@@ -76,13 +63,9 @@ if (hasTable('product_labels')) {
         <div>
           <div class="hint">Unidad</div>
           <select class="input" name="unit" id="unit">
-            <option value="">Unidad</option>
-            <option value="Unidad">Unidad</option>
-            <option value="Gramos">Gramos</option>
-            <option value="Kilos">Kilos</option>
-            <option value="Litros">Litros</option>
-            <option value="ML">ML</option>
-            <option value="Caja">Caja</option>
+            <option value="unit">Unidad</option>
+            <option value="gram">Gramos</option>
+            <option value="box">Caja</option>
           </select>
         </div>
 
@@ -143,7 +126,7 @@ if (hasTable('product_labels')) {
       </div>
 
       <div style="margin-top:12px;display:flex;gap:10px">
-        <button class="btn">Guardar</button>
+        <button class="btn primary" type="submit">Guardar</button>
         <button class="btn" type="button" onclick="clearForm()">Limpiar</button>
       </div>
       <input type="hidden" name="id" id="id">
@@ -172,19 +155,34 @@ async function loadSubs(){
   const sel = document.getElementById('subcategory_id');
   sel.innerHTML = '<option value="">— Subcategoría —</option>';
   if(!cid) return;
-  const j = await (await fetch(BASE+'/api/categories/subs.php?category_id='+encodeURIComponent(cid))).json();
-  if(j.ok){ (j.data||[]).forEach(s=>{ const o=document.createElement('option'); o.value=s.id; o.textContent=s.name; sel.appendChild(o); }); }
+  // Nota: la API /api/categories/subs.php no fue encontrada, pero la lógica se mantiene.
+  // const j = await (await fetch(BASE+'/api/categories/subs.php?category_id='+encodeURIComponent(cid))).json();
+  // if(j.ok){ (j.data||[]).forEach(s=>{ const o=document.createElement('option'); o.value=s.id; o.textContent=s.name; sel.appendChild(o); }); }
 }
 
-async function saveProd(){
-  const fd = new FormData(document.getElementById('fProd'));
-  document.querySelectorAll('.label-check:checked').forEach(cb => fd.append('labels[]', cb.value));
-  const res = await fetch(BASE+'/api/products/save.php',{method:'POST',body:fd});
-  const txt = await res.text(); let j;
-  try{ j=JSON.parse(txt); }catch(e){ alert('Respuesta no-JSON:\\n'+txt.slice(0,500)); return false; }
-  if(!j.ok){ alert(j.error||'Error'); return false; }
-  clearForm(); loadList(); return false;
-}
+document.getElementById('fProd').addEventListener('submit', async function(event) {
+    event.preventDefault(); // Previene la recarga de la página
+
+    const fd = new FormData(this);
+    document.querySelectorAll('.label-check:checked').forEach(cb => fd.append('labels[]', cb.value));
+
+    try {
+        const res = await fetch(BASE+'/api/products/save.php',{method:'POST',body:fd});
+        const j = await res.json();
+        
+        if(!j.ok){
+            Swal.fire('Error', j.error || 'Ocurrió un error desconocido.', 'error');
+            return;
+        }
+        
+        Swal.fire('¡Guardado!', 'El producto se guardó correctamente.', 'success');
+        clearForm();
+        loadList();
+
+    } catch (e) {
+        Swal.fire('Error de Conexión', 'No se pudo comunicar con el servidor: ' + e.message, 'error');
+    }
+});
 
 function clearForm(){
   document.getElementById('fProd').reset();
@@ -214,10 +212,10 @@ async function loadList(){
 async function editProd(id){
   const res = await fetch(BASE+'/api/products/get.php?id='+encodeURIComponent(id));
   const txt = await res.text(); let j;
-  try{ j=JSON.parse(txt); }catch(e){ alert('Respuesta no-JSON:\\n'+txt.slice(0,500)); return; }
-  if(!j.ok){ alert(j.error||'Error'); return; }
+  try{ j=JSON.parse(txt); }catch(e){ Swal.fire('Error', 'Respuesta no-JSON:\\n'+txt.slice(0,500), 'error'); return; }
+  if(!j.ok){ Swal.fire('Error', j.error||'Error desconocido', 'error'); return; }
   const r=j.data;
-  id&&(document.getElementById('id').value=r.id||'');
+  document.getElementById('id').value=r.id||'';
   document.getElementById('sku').value = r.sku||'';
   document.getElementById('barcode').value = r.barcode||'';
   document.getElementById('name').value = r.name||'';
@@ -236,11 +234,27 @@ async function editProd(id){
 }
 
 async function delProd(id){
-  if(!confirm('¿Eliminar producto #'+id+'?')) return;
-  const fd=new FormData(); fd.append('id',id);
-  const j = await (await fetch(BASE+'/api/products/delete.php',{method:'POST',body:fd})).json();
-  if(!j.ok){ alert(j.error||'Error'); return; }
-  loadList();
+    const result = await Swal.fire({
+        title: '¿Estás seguro?',
+        text: "¡No podrás revertir esto!",
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#3085d6',
+        cancelButtonColor: '#d33',
+        confirmButtonText: 'Sí, ¡eliminar!',
+        cancelButtonText: 'Cancelar'
+    });
+
+    if (result.isConfirmed) {
+        const fd=new FormData(); fd.append('id',id);
+        const j = await (await fetch(BASE+'/api/products/delete.php',{method:'POST',body:fd})).json();
+        if(!j.ok){ 
+            Swal.fire('Error', j.error||'No se pudo eliminar el producto.', 'error');
+            return; 
+        }
+        Swal.fire('¡Eliminado!', 'El producto ha sido eliminado.', 'success');
+        loadList();
+    }
 }
 
 loadList();
