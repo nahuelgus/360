@@ -9,7 +9,7 @@
   // Cargar métodos de pago
   async function loadPaymentMethods(){
     try{
-      const res = await fetch('/360/app/api/payment_methods/list.php').then(r=>r.ok?r.json():{ok:false});
+      const res = await fetch('/360/app/api/payments/list_methods.php').then(r=>r.ok?r.json():{ok:false});
       if(res && res.ok && Array.isArray(res.data)){
         const sel = $('#payment_method_id'); sel.innerHTML='';
         res.data.forEach(pm=>{
@@ -93,28 +93,104 @@
     if(pm>0 && am>0){ pays.push({payment_method_id:pm, amount:am, ref:rf}); render(); }
   });
 
+  // --- CÓDIGO ACTUALIZADO ---
   // Confirmar venta → API
-  $('#btn_confirm').addEventListener('click', async ()=>{
-    if(items.length===0) { alert('No hay items'); return; }
-    const payload = {
-      branch_id: +$('#branch_id').value,
-      doc_mode:  $('#doc_mode').value,
-      cbte_letter: $('#cbte_letter').value,
-      items: items.map(i=>({product_id:i.product_id, qty:i.qty, unit_price:i.unit_price, discount_pct:i.discount_pct})),
-      discount_total: +($('#discount_total').value||0),
-      payments: pays
-    };
-    const res = await fetch('/360/app/api/sales/create.php',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(r=>r.json());
-    if(!res || !res.ok){ alert((res&&res.error)||'Error'); return; }
-    if(res.needs_arca){
-      // Paso 2: llamar a /api/fiscal/emit.php (no implementado aún en este paso)
-      alert('Venta creada. Falta emisión ARCA (Paso 2). Sale #'+res.sale_id);
-    } else {
-      alert('Venta Ticket X creada. Sale #'+res.sale_id);
+  $('#btn_confirm').addEventListener('click', () => {
+    if (items.length === 0) {
+        Swal.fire('Error', 'No hay items en el carrito.', 'error');
+        return;
     }
-    // reset
-    items.length=0; pays.length=0; $('#discount_total').value='0'; render();
+    
+    const payload = {
+        branch_id: +$('#branch_id').value,
+        doc_mode: $('#doc_mode').value,
+        cbte_letter: $('#cbte_letter').value,
+        items: items.map(i => ({ product_id: i.product_id, qty: i.qty, unit_price: i.unit_price, discount_pct: i.discount_pct })),
+        discount_total: +($('#discount_total').value || 0),
+        payments: pays,
+        // Asumo que tienes un input para el client_id, si no, debes añadirlo.
+        // Si usas un buscador de clientes, deberías guardar el ID en un campo oculto.
+        client_id: document.getElementById('customer-id') ? document.getElementById('customer-id').value : 1 // Cliente por defecto (Consumidor Final)
+    };
+
+    // Muestra un indicador de carga
+    Swal.fire({
+        title: 'Procesando Venta...',
+        text: 'Por favor, espere.',
+        allowOutsideClick: false,
+        didOpen: () => {
+            Swal.showLoading();
+        }
+    });
+
+    // 1. Primero, crea la venta en tu sistema
+    fetch('/360/app/api/sales/create.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.ok) {
+            const saleId = data.sale_id;
+
+            // 2. Si se debe facturar, llama a la API fiscal
+            if (data.needs_arca) {
+                Swal.update({ title: 'Venta registrada. Emitiendo factura...' });
+
+                fetch('/360/app/api/fiscal/emit.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sale_id: saleId })
+                })
+                .then(response => response.json())
+                .then(fiscalData => {
+                    if (fiscalData.status === 'success') {
+                        Swal.fire({
+                            icon: 'success',
+                            title: '¡Factura Emitida!',
+                            html: `La venta y la factura se generaron correctamente.<br><b>CAE: ${fiscalData.result.cae}</b>`,
+                            confirmButtonText: 'Ver Comprobante'
+                        }).then(() => {
+                            // Redirigir o limpiar el formulario
+                            items.length=0; pays.length=0; $('#discount_total').value='0'; render();
+                            window.open(`/360/app/public/sales/view.php?id=${saleId}`, '_blank');
+                        });
+                    } else {
+                        Swal.fire({
+                            icon: 'warning',
+                            title: 'Venta Guardada, pero no se pudo facturar',
+                            text: `Error de ARCA: ${fiscalData.message || 'Error desconocido'}`,
+                            confirmButtonText: 'Ver Venta (sin factura)'
+                        }).then(() => {
+                           window.location.href = `/360/app/public/sales/view.php?id=${saleId}`;
+                        });
+                    }
+                })
+                .catch(error => {
+                    Swal.fire('Error de Conexión', 'No se pudo conectar con el servicio de facturación. La venta fue guardada.', 'error');
+                });
+            } else {
+                // Si era un Ticket X o similar (no fiscal)
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Venta Registrada',
+                    text: `Se generó el comprobante interno #${saleId}.`,
+                    confirmButtonText: 'Aceptar'
+                }).then(() => {
+                    items.length=0; pays.length=0; $('#discount_total').value='0'; render();
+                });
+            }
+        } else {
+            Swal.fire('Error al Crear Venta', data.error || 'Ocurrió un error desconocido', 'error');
+        }
+    })
+    .catch(error => {
+        Swal.fire('Error de Red', 'No se pudo completar la venta. Revisa tu conexión.', 'error');
+    });
   });
+  // --- FIN CÓDIGO ACTUALIZADO ---
+
 
   // Atajos básicos
   $('#barcode').addEventListener('keydown',e=>{ if(e.key==='Enter') $('#btn_add').click(); });
