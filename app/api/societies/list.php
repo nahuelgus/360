@@ -1,0 +1,2 @@
+<?php require_once __DIR__.'/../../lib/auth.php'; require_role(['admin','supervisor']); header('Content-Type: application/json');
+$rows=DB::all("SELECT id,name,tax_id,email,phone,address,city,state,postal_code,is_active FROM societies ORDER BY id DESC"); echo json_encode(['ok'=>true,'data'=>$rows]);

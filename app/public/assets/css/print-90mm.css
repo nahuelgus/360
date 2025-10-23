@@ -1,0 +1,12 @@
+@media print {
+  @page { size: 90mm auto; margin: 0 }
+  html, body { width: 90mm }
+}
+body { font: 12px/1.25 "Helvetica", Arial, sans-serif; color:#222 }
+h1{ font-size:14px; margin:6px 0 }
+.row{ display:flex; justify-content:space-between }
+.hr{ border-top:1px dashed #999; margin:6px 0 }
+.tot{ font-weight:700 }
+.center{ text-align:center }
+.small{ font-size:11px;color:#666 }
+.qr{ margin:10px auto; width:140px; height:140px }

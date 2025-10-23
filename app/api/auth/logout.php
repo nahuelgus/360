@@ -1,0 +1,1 @@
+<?php require_once __DIR__.'/../../lib/auth.php'; auth_logout(); header('Location: /360/app/public/auth/login.php');

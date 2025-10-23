@@ -1,0 +1,2 @@
+<?php require_once __DIR__.'/../../lib/auth.php'; header('Content-Type: application/json');
+$rows=DB::all("SELECT id,name,bank,fee_percent,is_active FROM payment_methods ORDER BY name"); echo json_encode(['ok'=>true,'data'=>$rows]);

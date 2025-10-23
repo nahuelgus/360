@@ -1,0 +1,2 @@
+<?php require_once __DIR__.'/../../lib/auth.php'; header('Content-Type: application/json');
+$data=DB::all("SELECT id,name,icon_path FROM product_labels ORDER BY name"); echo json_encode(['ok'=>true,'data'=>$data]);
