@@ -1,14 +1,15 @@
 <?php
 // /360/app/public/sales/index.php
 require_once __DIR__ . '/../../api/auth/require_login.php';
-require_once __DIR__ . '/../../lib/db.php'; // <-- ESTA LÍNEA FALTABA
+require_once __DIR__ . '/../../lib/db.php'; // Conexión a DB
 
 $cfg  = require __DIR__.'/../../config/.env.php';
 $BASE = $cfg['app']['base_url'] ?? '/360/app';
 
 // Para los filtros
 $branches = DB::all("SELECT id, name FROM branches ORDER BY name");
-$users = DB::all("SELECT u.id, u.name as full_name FROM users u WHERE u.role IN ('admin','supervisor','vendedor') ORDER BY u.name"); // Ajustado a 'name'
+// CORRECCIÓN: Se usa la columna 'name' en lugar de 'full_name'
+$users = DB::all("SELECT id, name AS full_name FROM users WHERE role IN ('admin','supervisor','seller') ORDER BY name");
 ?>
 <!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ventas</title>
@@ -53,19 +54,10 @@ $users = DB::all("SELECT u.id, u.name as full_name FROM users u WHERE u.role IN 
         <table class="table" id="tSales">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Fecha</th>
-              <th>Cliente</th>
-              <th>Vendedor</th>
-              <th>Sucursal</th>
-              <th>Total</th>
-              <th>Estado ARCA</th>
-              <th></th>
+              <th>ID</th> <th>Fecha</th> <th>Cliente</th> <th>Vendedor</th> <th>Sucursal</th> <th style="text-align:right;">Total</th> <th>Estado ARCA</th> <th></th>
             </tr>
           </thead>
-          <tbody>
-            <tr><td colspan="8" style="text-align:center;">Cargando...</td></tr>
-          </tbody>
+          <tbody></tbody>
           <tfoot></tfoot>
         </table>
     </div>
@@ -142,10 +134,8 @@ async function cancelSale(id, status) {
     text: `Se anulará la venta #${id}. El stock de los productos será devuelto y se generará un movimiento de caja inverso. ¡Esta acción no se puede revertir!`,
     icon: 'warning',
     showCancelButton: true,
-    confirmButtonColor: '#d33',
-    cancelButtonColor: '#3085d6',
-    confirmButtonText: 'Sí, ¡anular ahora!',
-    cancelButtonText: 'Cancelar'
+    confirmButtonColor: '#d33', cancelButtonColor: '#3085d6',
+    confirmButtonText: 'Sí, ¡anular ahora!', cancelButtonText: 'Cancelar'
   });
 
   if (result.isConfirmed) {
@@ -159,14 +149,13 @@ async function cancelSale(id, status) {
       if (!j.ok) throw new Error(j.error || 'Error desconocido');
       
       await Swal.fire('¡Anulada!', 'La venta ha sido anulada correctamente.', 'success');
-      loadSales(); // Recargar la lista
+      loadSales();
     } catch(e) {
       Swal.fire('Error', 'No se pudo anular la venta: ' + e.message, 'error');
     }
   }
 }
 
-// Carga inicial
 document.addEventListener('DOMContentLoaded', loadSales);
 </script>
 </body></html>
