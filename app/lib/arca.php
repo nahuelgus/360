@@ -81,7 +81,7 @@ class ArcaClient {
                         WHERE s.id = ?", [$sale_id]);
         if (!$sale) throw new RuntimeException('Venta no encontrada');
 
-        if (strtoupper((string)($sale['doc_mode'] ?? '')) !== 'INVOICE') throw new RuntimeException('La venta no es de tipo Factura');
+        if (strtoupper((string)($sale['doc_type'] ?? '')) !== 'INVOICE') throw new RuntimeException('La venta no es de tipo Factura');
         $letter = in_array($sale['cbte_letter'], ['A','B','C']) ? $sale['cbte_letter'] : 'B';
 
         $items = DB::all("SELECT si.*, p.name AS product_name, p.barcode FROM sale_items si JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?", [$sale_id]);
@@ -177,7 +177,6 @@ class ArcaClient {
     // ===== Helpers (Mantenemos tus helpers originales) =====
 
     private function computeTotals(array $sale, array $items): array {
-        // ... (Tu código original de computeTotals se mantiene intacto) ...
         $cols = DB::all("SHOW COLUMNS FROM sales");
         $has = function($f) use ($cols){ foreach($cols as $c) if($c['Field']===$f) return true; return false; };
         if ($has('subtotal') && $has('discount_total') && $has('total')) {
@@ -201,7 +200,6 @@ class ArcaClient {
     }
 
     private function mapCustomer(?array $cust, string $letter): ?array {
-        // ... (Tu código original de mapCustomer se mantiene intacto) ...
         if (!$cust) return ['name'=>'Consumidor Final', 'tax_id'=>'0', 'address'=>'', 'city'=>'', 'state'=>'', 'postal_code'=>''];
         return [
           'name'       => (string)($cust['name'] ?? 'Consumidor Final'),
@@ -214,7 +212,6 @@ class ArcaClient {
     }
 
     private function httpJson(string $method, string $url, array $payload): array {
-        // ... (Tu código original de httpJson se mantiene intacto) ...
         $ch = curl_init($url);
         $headers = ['Content-Type: application/json'];
         curl_setopt_array($ch, [
@@ -246,8 +243,8 @@ class ArcaClient {
         $cols = DB::all("SHOW COLUMNS FROM sales");
         $existing = array_column($cols, 'Field');
         
-        $data = ['arca_status' => $status] + $fields + $extra_fields; // Unimos todos los campos
-    
+        $data = ['arca_status' => $status] + $fields + $extra_fields;
+
         $set = []; $vals= [];
         foreach ($data as $k=>$v) {
             if (!in_array($k, $existing, true)) continue;
@@ -260,7 +257,6 @@ class ArcaClient {
     }
 
     private function mockResponse(?string $token=null, ?string $sign=null): array {
-        // ... (Tu código original de mockResponse se mantiene intacto) ...
         $nro = rand(10000,99999);
         $cae = substr(strtoupper(sha1(($token?:'t').($sign?:'s').microtime(true))),0,14);
         return [
@@ -274,10 +270,6 @@ class ArcaClient {
 
     // ===== WSFE (SOAP) - SECCIÓN ACTUALIZADA =====
 
-    /**
-     * NUEVA FUNCIÓN: Arma el sobre SOAP para consultar el último comprobante.
-     * Usa el namespace http://ar.gov.afip.dif.wsfev1/ que es el de SOAP 1.2
-     */
     private function buildFECompUltimoAutorizadoEnvelope(array $ta, string $cuit, int $ptoVta, int $cbteTipo): string {
         return <<<XML
 <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:ar="http://ar.gov.afip.dif.wsfev1/">
@@ -297,18 +289,14 @@ class ArcaClient {
 XML;
     }
 
-    /**
-     * FUNCIÓN REEMPLAZADA: Tu `buildFECAESolicitarEnvelope` era un borrador.
-     * Esta es la versión completa que coincide con el WSDL de AFIP.
-     */
     private function buildFECAESolicitarEnvelope(array $ta, string $cuit, int $ptoVta, string $letter, array $payload, int $nextVoucherNum): string {
         $cbteTipo = $this->mapCbteTipo($letter);
         $total    = number_format($payload['totals']['total'] ?? 0, 2, '.', '');
-        $neto     = $total; // Para Consumidor Final (B/C), el neto es igual al total.
-        $iva      = '0.00'; // No se discrimina IVA.
+        $neto     = $total;
+        $iva      = '0.00';
         
         $docNro   = preg_replace('/\\D+/', '', $payload['receiver']['tax_id'] ?? '0');
-        $docTipo  = ($docNro === '0' || strlen($docNro) === 8) ? 96 : 80; // 96 DNI, 80 CUIT, (99 CF)
+        $docTipo  = ($docNro === '0' || strlen($docNro) === 8) ? 96 : 80; // 96 DNI, 80 CUIT
 
         return <<<XML
 <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:ar="http://ar.gov.afip.dif.wsfev1/">
@@ -352,19 +340,14 @@ XML;
     }
 
     private function mapCbteTipo(string $letter): int {
-        // ... (Tu código original de mapCbteTipo se mantiene intacto) ...
         switch ($letter) {
-          case 'A': return 1;   // Factura A
-          case 'B': return 6;   // Factura B
-          case 'C': return 11;  // Factura C
+          case 'A': return 1;
+          case 'B': return 6;
+          case 'C': return 11;
           default:  return 6;
         }
     }
 
-    /**
-     * FUNCIÓN ACTUALIZADA: Modificada para usar SOAP 1.2 (application/soap+xml)
-     * que es el estándar preferido por los servicios .asmx de AFIP.
-     */
     private function soapCall(string $url, string $envelope, string $action): string {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -372,8 +355,9 @@ XML;
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $envelope,
             CURLOPT_HTTPHEADER     => [
+                // Corregido para SOAP 1.2
                 'Content-Type: application/soap+xml; charset=utf-8',
-                "Action: {$action}" // SOAP 1.2 no usa comillas en la acción
+                "Action: {$action}" 
             ],
             CURLOPT_TIMEOUT        => 60,
         ]);
@@ -391,7 +375,6 @@ XML;
     }
 
     private function findTag(string $xml, string $tag): ?string {
-        // ... (Tu código original de findTag se mantiene intacto) ...
         if (preg_match("/<{$tag}>([\\s\\S]*?)<\\/{$tag}>/i", $xml, $m)) return trim($m[1]);
         return null;
     }
