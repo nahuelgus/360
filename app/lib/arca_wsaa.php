@@ -10,7 +10,6 @@ class WSAAAuth {
     private string $service;
     private array $certPaths;
 
-    // URLs del Web Service de Autenticación y Autorización
     private const WSAA_URLS = [
         'sandbox'    => 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms',
         'production' => 'https://wsaa.afip.gov.ar/ws/services/LoginCms'
@@ -72,7 +71,7 @@ class WSAAAuth {
         $now = new DateTime();
         $uniqueId = time();
         $generationTime = $now->format('c');
-        $expirationTime = $now->add(new DateInterval('PT2H'))->format('c'); // Validez de 2 horas
+        $expirationTime = $now->add(new DateInterval('PT2H'))->format('c');
 
         return '<?xml version="1.0" encoding="UTF-8" ?>' .
                '<loginTicketRequest version="1.0">' .
@@ -86,19 +85,26 @@ class WSAAAuth {
     }
 
     /**
-     * Firma el TRA replicando el método del cliente oficial de AFIP.
+     * Firma el TRA replicando el método de librerías probadas.
      * **ESTA ES LA VERSIÓN CORREGIDA FINAL**
      */
     private function sign_TRA(string $tra_xml): string {
-        $certPath = "file://" . realpath($this->certPaths['cert']);
-        $keyPath = "file://" . realpath($this->certPaths['key']);
+        $certPath = realpath($this->certPaths['cert']);
+        $keyPath = realpath($this->certPaths['key']);
         
         $in_file_path = tempnam(sys_get_temp_dir(), 'TRA_IN_');
         $out_file_path = tempnam(sys_get_temp_dir(), 'TRA_OUT_');
         file_put_contents($in_file_path, $tra_xml);
 
-        // Se firma con la clave privada (asumiendo que no tiene contraseña) y sin flags extra
-        $status = openssl_pkcs7_sign($in_file_path, $out_file_path, $certPath, [$keyPath, ''], [], 0);
+        // Se firma con la clave privada (asumiendo que no tiene contraseña)
+        $status = openssl_pkcs7_sign(
+            $in_file_path,
+            $out_file_path,
+            'file://' . $certPath,
+            ['file://' . $keyPath, ''], // La contraseña es vacía
+            [],
+            !PKCS7_DETACHED
+        );
 
         unlink($in_file_path);
 
@@ -109,27 +115,27 @@ class WSAAAuth {
             throw new RuntimeException($error);
         }
 
-        $signed_tra_pem = file_get_contents($out_file_path);
+        $signed_tra_with_headers = file_get_contents($out_file_path);
         unlink($out_file_path);
         
-        // Se extrae el contenido Base64 entre los marcadores BEGIN/END, como en el cliente oficial
-        if (preg_match('/-----BEGIN PKCS7-----(.*)-----END PKCS7-----/s', $signed_tra_pem, $matches)) {
-            // Se eliminan todos los espacios en blanco (saltos de línea, etc.) del Base64
-            $cms = preg_replace('/\s+/', '', $matches[1]);
-            return $cms;
-        } else {
-            throw new RuntimeException("No se pudo extraer la firma PKCS7 del archivo firmado.");
+        // Se extrae el contenido de la firma (el CMS) cortando las cabeceras
+        $position = strpos($signed_tra_with_headers, "\n\n");
+        if ($position === false) {
+             throw new RuntimeException('No se pudo extraer la firma PKCS7 del archivo firmado (delimitador no encontrado).');
         }
+
+        return substr($signed_tra_with_headers, $position + 2);
     }
     
-    private function call_WSAA(string $cms_base64): string {
+    private function call_WSAA(string $cms_body): string {
         $url = self::WSAA_URLS[$this->env];
         
         $soapReq = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">' .
                      '<soapenv:Header/>' .
                      '<soapenv:Body>' .
                        '<wsaa:loginCms>' .
-                         '<wsaa:in0>' . $cms_base64 . '</wsaa:in0>' .
+                         // El CMS se envía directamente, sin codificación adicional
+                         '<wsaa:in0>' . $cms_body . '</wsaa:in0>' .
                        '</wsaa:loginCms>' .
                      '</soapenv:Body>' .
                    '</soapenv:Envelope>';
