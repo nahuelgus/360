@@ -6,20 +6,18 @@ require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/arca_wsaa.php';
 
 class ArcaClient {
-    private string $env;        // 'mock' | 'sandbox' | 'production'
+    private string $env;
     private ?string $api_key;
     private ?string $api_secret;
-    private int     $pos_number; // Punto de venta
-    private ?int   $society_id;
-    private ?int   $branch_id;
+    private int $pos_number;
+    private ?int $society_id;
+    private ?int $branch_id;
 
-    // URLs para REST (no las usamos por ahora, pero se mantiene la estructura)
     private const URLS_REST = [
         'sandbox'    => 'https://wswhomo.afip.gov.ar/wsfev1/service.asmx',
         'production' => 'https://wsfe.afip.gov.ar/wsfev1/service.asmx'
     ];
 
-    // URLs para SOAP (WSAA/WSFE)
     private const WSFE_URLS = [
       'sandbox'    => 'https://wswhomo.afip.gov.ar/wsfev1/service.asmx',
       'production' => 'https://wsfe.afip.gov.ar/wsfev1/service.asmx'
@@ -36,7 +34,6 @@ class ArcaClient {
         $this->branch_id  = $branch_id;
     }
 
-    /** Construye ArcaClient leyendo DB a partir de sale_id (TU CÓDIGO ORIGINAL - MANTENIDO) */
     public static function fromSaleId(int $sale_id): self {
         $sale = DB::one("SELECT s.*, b.society_id, b.default_pos_number
                          FROM sales s
@@ -47,8 +44,12 @@ class ArcaClient {
         $society_id = (int)$sale['society_id'];
         $branch_id  = (int)$sale['branch_id'];
 
-        // 1) Preferimos arca_accounts
-        $acc = DB::one("SELECT * FROM arca_accounts WHERE society_id=? AND COALESCE(enabled,1)=1 ORDER BY id DESC LIMIT 1", [$society_id]);
+        // ==================================================================
+        // *** ESTA ES LA LÍNEA CORREGIDA ***
+        // Se eliminó "ORDER BY id DESC" porque la tabla `arca_accounts` no tiene esa columna.
+        $acc = DB::one("SELECT * FROM arca_accounts WHERE society_id=? AND COALESCE(enabled,1)=1 LIMIT 1", [$society_id]);
+        // ==================================================================
+
         if ($acc) {
           $env   = (string)($acc['env'] ?? 'mock');
           $key   = $acc['api_key'] ?: null;
@@ -57,7 +58,6 @@ class ArcaClient {
           return new self($env, $key, $sec, $pos, $society_id, $branch_id);
         }
 
-        // 2) Fallback a societies.*
         $soc = DB::one("SELECT * FROM societies WHERE id=?", [$society_id]);
         if (!$soc) throw new RuntimeException('Society no encontrada');
         if (!($soc['arca_enabled'] ?? 0)) throw new RuntimeException('ARCA no habilitado en societies');
@@ -70,30 +70,21 @@ class ArcaClient {
         return new self($env, $key ?: null, $sec ?: null, $pos, $society_id, $branch_id);
     }
 
-    /** Emite la factura de una venta. (LÓGICA DE FACTURACIÓN MEJORADA) */
     public function emitInvoiceForSale(int $sale_id): array {
-        $sale = DB::one("SELECT s.*, b.society_id, b.name AS branch_name, b.city AS branch_city, b.state AS branch_state,
-                               so.name AS soc_legal_name, so.tax_id AS soc_tax_id, so.gross_income AS soc_gi,
-                               so.address AS soc_address, so.city AS soc_city, so.state AS soc_state, so.postal_code AS soc_zip
+        $sale = DB::one("SELECT s.*, b.society_id, so.name AS soc_legal_name, so.tax_id AS soc_tax_id
                         FROM sales s
                         JOIN branches b ON b.id = s.branch_id
                         JOIN societies so ON so.id = b.society_id
                         WHERE s.id = ?", [$sale_id]);
         if (!$sale) throw new RuntimeException('Venta no encontrada');
 
-        // ==================================================================
-        // *** ESTA ES LA LÍNEA CORREGIDA ***
-        // Se cambió $sale['doc_mode'] por $sale['doc_type'] para coincidir con la base de datos
         if (strtoupper((string)($sale['doc_type'] ?? '')) !== 'INVOICE') {
              throw new RuntimeException('La venta no es de tipo Factura');
         }
-        // ==================================================================
 
         $letter = in_array($sale['cbte_letter'], ['A','B','C']) ? $sale['cbte_letter'] : 'B';
-
         $items = DB::all("SELECT si.*, p.name AS product_name, p.barcode FROM sale_items si JOIN products p ON p.id = si.product_id WHERE si.sale_id = ?", [$sale_id]);
         if (!$items) throw new RuntimeException('La venta no tiene ítems');
-
         $customer = !empty($sale['customer_id']) ? DB::one("SELECT * FROM customers WHERE id=?", [(int)$sale['customer_id']]) : null;
         $totals = $this->computeTotals($sale, $items);
 
@@ -105,26 +96,21 @@ class ArcaClient {
           'totals'        => $totals
         ];
 
-        // ==== MODO MOCK (Mantenido) ====
         if ($this->env === 'mock') {
             $out = $this->mockResponse();
             $this->updateSaleArca($sale_id, 'sent', $out);
             return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'mock'];
         }
 
-        // ==== REST por API KEY/SECRET (Mantenido) ====
         if (!empty($this->api_key) && !empty($this->api_secret)) {
             $err = 'El modo REST (api_key) no está implementado para la facturación SOAP.';
             $this->updateSaleArca($sale_id, 'error', ['arca_error'=>$err]);
             throw new RuntimeException($err);
         }
 
-        // ==== WSAA → WSFE (token/sign) ====
         $socCUIT = preg_replace('/\\D+/', '', (string)($sale['soc_tax_id'] ?? ''));
         if (!$socCUIT) throw new RuntimeException('CUIT de la sociedad vacío');
-
         $ta = (new WSAAAuth((int)$sale['society_id'], $this->env, 'wsfe'))->getTA();
-        
         $wsfeUrl = self::WSFE_URLS[$this->env] ?? null;
         if (!$wsfeUrl) {
           $out = $this->mockResponse($ta['token'], $ta['sign']);
@@ -134,16 +120,11 @@ class ArcaClient {
 
         $cbteTipo = $this->mapCbteTipo($letter);
         $lastVoucherSoap = $this->buildFECompUltimoAutorizadoEnvelope($ta, $socCUIT, $this->pos_number, $cbteTipo);
-        
         $lastVoucherResp = $this->soapCall($wsfeUrl, $lastVoucherSoap, 'http://ar.gov.afip.dif.wsfev1/FECompUltimoAutorizado');
-        
         $lastVoucherNum = (int)$this->findTag($lastVoucherResp, 'CbteNro');
         $nextVoucherNum = $lastVoucherNum + 1;
-
         $soapEnv = $this->buildFECAESolicitarEnvelope($ta, $socCUIT, $this->pos_number, $letter, $payload, $nextVoucherNum);
-        
         $soapResp = $this->soapCall($wsfeUrl, $soapEnv, 'http://ar.gov.afip.dif.wsfev1/FECAESolicitar');
-
         $result = $this->findTag($soapResp, 'Resultado');
         if ($result !== 'A') {
              $errors = '';
@@ -153,26 +134,16 @@ class ArcaClient {
              $this->updateSaleArca($sale_id, 'error', ['arca_error' => mb_substr($errorMsg, 0, 255)]);
              throw new RuntimeException($errorMsg);
         }
-
         $cae = $this->findTag($soapResp, 'CAE');
         $caeVto = $this->findTag($soapResp, 'CAEFchVto');
         if (!$cae) {
             $this->updateSaleArca($sale_id, 'error', ['arca_error'=>mb_substr('WSFE: Aprobado pero sin CAE. Resp: '.substr($soapResp,0,300),0,255)]);
             throw new RuntimeException('WSFE: no se encontró CAE/Número en la respuesta');
         }
-
-        $out = [
-          'cbte_number' => $nextVoucherNum,
-          'cae'         => $cae,
-          'cae_due'     => $caeVto ? date('Y-m-d', strtotime($caeVto)) : null,
-          'pdf_url'     => null,
-          'qr_url'      => null,
-        ];
-        
+        $out = ['cbte_number' => $nextVoucherNum, 'cae' => $cae, 'cae_due' => $caeVto ? date('Y-m-d', strtotime($caeVto)) : null, 'pdf_url' => null, 'qr_url' => null];
         $this->updateSaleArca($sale_id, 'sent', $out, ['pos_number' => $this->pos_number]);
         return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'wsaa-wsfe'];
     }
-
     // ===== Helpers (Mantenemos tus helpers originales sin cambios) =====
 
     private function computeTotals(array $sale, array $items): array {
