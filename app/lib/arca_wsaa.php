@@ -37,29 +37,25 @@ class WSAAAuth {
     }
 
     /**
-     * Obtiene el Ticket de Acceso (TA). Primero intenta cachearlo y si no, lo solicita a AFIP.
+     * Obtiene el Ticket de Acceso (TA).
      */
     public function getTA(): array {
-        // La caché se guarda en un archivo temporal para no solicitar un TA en cada transacción.
         $cachePath = __DIR__ . '/../../secure/cache/ta_' . $this->society_id . '_' . $this->env . '.json';
         
         if (file_exists($cachePath)) {
             $ta = json_decode(file_get_contents($cachePath), true);
-            // Verifica que el TA no esté expirado (con un margen de seguridad)
             if (is_array($ta) && time() < (strtotime($ta['expirationTime']) - 300)) {
                 return $ta;
             }
         }
 
-        // Si no hay caché válida, se solicita uno nuevo a AFIP.
         $tra_xml = $this->create_TRA();
         $signed_tra = $this->sign_TRA($tra_xml);
         $ta_response = $this->call_WSAA($signed_tra);
 
-        $ta_xml = simplexml_load_string($ta_response);
+        $ta_xml = @simplexml_load_string($ta_response);
         if (!$ta_xml) {
-            // Este es el error que estabas viendo: la respuesta de AFIP no es un XML válido.
-            throw new RuntimeException("WSAA: TA inválido (no XML). Respuesta del servidor: " . htmlspecialchars($ta_response));
+            throw new RuntimeException("WSAA: TA inválido (no XML). Respuesta del servidor: " . htmlspecialchars(substr($ta_response, 0, 500)));
         }
 
         $credentials = $ta_xml->children('soap', true)->Body->children()->loginCmsResponse->loginCmsReturn;
@@ -71,82 +67,83 @@ class WSAAAuth {
             'expirationTime'  => (string)$credentials->header->expirationTime,
         ];
 
-        // Guardar el nuevo TA en la caché
         if (!is_dir(dirname($cachePath))) mkdir(dirname($cachePath), 0775, true);
         file_put_contents($cachePath, json_encode($new_ta));
 
         return $new_ta;
     }
 
-    /**
-     * Crea el Ticket de Requerimiento de Acceso (TRA) en formato XML.
-     */
     private function create_TRA(): string {
         $now = new DateTime();
         $uniqueId = time();
         $generationTime = $now->format('c');
-        $expirationTime = $now->add(new DateInterval('PT1H'))->format('c'); // 1 hora de validez
+        $expirationTime = $now->add(new DateInterval('PT1H'))->format('c');
 
-        return <<<XML
-<?xml version="1.0" encoding="UTF-8" ?>
-<loginTicketRequest version="1.0">
-  <header>
-    <uniqueId>{$uniqueId}</uniqueId>
-    <generationTime>{$generationTime}</generationTime>
-    <expirationTime>{$expirationTime}</expirationTime>
-  </header>
-  <service>{$this->service}</service>
-</loginTicketRequest>
-XML;
+        return '<?xml version="1.0" encoding="UTF-8" ?>' .
+               '<loginTicketRequest version="1.0">' .
+                 '<header>' .
+                   '<uniqueId>' . $uniqueId . '</uniqueId>' .
+                   '<generationTime>' . $generationTime . '</generationTime>' .
+                   '<expirationTime>' . $expirationTime . '</expirationTime>' .
+                 '</header>' .
+                 '<service>' . $this->service . '</service>' .
+               '</loginTicketRequest>';
     }
 
     /**
      * Firma el TRA usando el certificado y la clave privada.
-     * **ESTA FUNCIÓN ESTÁ CORREGIDA**
+     * **ESTA ES LA VERSIÓN ROBUSTA QUE USA ARCHIVOS TEMPORALES**
      */
     private function sign_TRA(string $tra_xml): string {
-        $cert = "file://" . realpath($this->certPaths['cert']);
-        $pkey = "file://" . realpath($this->certPaths['key']);
+        $certPath = "file://" . realpath($this->certPaths['cert']);
+        $keyPath = "file://" . realpath($this->certPaths['key']);
+        
+        // Crear archivos temporales para la entrada y salida
+        $in_file_path = tempnam(sys_get_temp_dir(), 'TRA_IN_');
+        $out_file_path = tempnam(sys_get_temp_dir(), 'TRA_OUT_');
+        file_put_contents($in_file_path, $tra_xml);
 
         $status = openssl_pkcs7_sign(
-            "php://stdin", // Usamos streams para evitar archivos temporales
-            "php://stdout",
-            $cert,
-            $pkey,
-            [],      // Sin cabeceras adicionales
+            $in_file_path,
+            $out_file_path,
+            $certPath,
+            $keyPath,
+            [], // Sin cabeceras adicionales
             PKCS7_BINARY | PKCS7_DETACHED
         );
 
+        // Limpiar archivos temporales
+        unlink($in_file_path);
+
         if (!$status) {
-            throw new RuntimeException("Error al firmar el TRA con OpenSSL.");
+            unlink($out_file_path);
+            $error = "Error al firmar el TRA con OpenSSL.";
+            while ($msg = openssl_error_string()) {
+                $error .= " | " . $msg;
+            }
+            throw new RuntimeException($error);
         }
-        
-        // --- ESTA ES LA CORRECCIÓN CLAVE ---
-        // La salida de openssl_pkcs7_sign incluye cabeceras que AFIP no acepta.
-        // Este código las elimina, dejando solo el bloque de la firma digital (CMS).
-        $signed_tra_with_headers = stream_get_contents(STDIN);
+
+        $signed_tra_with_headers = file_get_contents($out_file_path);
+        unlink($out_file_path);
+
+        // Eliminar las cabeceras para dejar solo la firma CMS
         $parts = explode("\n\n", $signed_tra_with_headers, 2);
         
-        return $parts[1] ?? ''; // Devolvemos solo la segunda parte, que es la firma
+        return $parts[1] ?? '';
     }
 
-
-    /**
-     * Llama al Web Service de Autenticación (WSAA) de AFIP.
-     */
     private function call_WSAA(string $cms_body): string {
         $url = self::WSAA_URLS[$this->env];
         
-        $soapReq = <<<XML
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <wsaa:loginCms>
-      <wsaa:in0>{$cms_body}</wsaa:in0>
-    </wsaa:loginCms>
-  </soapenv:Body>
-</soapenv:Envelope>
-XML;
+        $soapReq = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">' .
+                     '<soapenv:Header/>' .
+                     '<soapenv:Body>' .
+                       '<wsaa:loginCms>' .
+                         '<wsaa:in0><![CDATA[' . $cms_body . ']]></wsaa:in0>' .
+                       '</wsaa:loginCms>' .
+                     '</soapenv:Body>' .
+                   '</soapenv:Envelope>';
 
         $ch = curl_init($url);
         curl_setopt_array($ch, [
@@ -168,7 +165,6 @@ XML;
         curl_close($ch);
 
         if ($http_code != 200) {
-            // Este es el error que viste: "WSAA HTTP 500"
             throw new RuntimeException("WSAA HTTP {$http_code} " . htmlspecialchars($response));
         }
 
