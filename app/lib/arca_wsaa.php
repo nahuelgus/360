@@ -53,18 +53,23 @@ class WSAAAuth {
         $signed_tra = $this->sign_TRA($tra_xml);
         $ta_response = $this->call_WSAA($signed_tra);
 
-        $ta_xml = @simplexml_load_string($ta_response);
-        if (!$ta_xml) {
-            throw new RuntimeException("WSAA: TA inválido (no XML). Respuesta del servidor: " . htmlspecialchars(substr($ta_response, 0, 500)));
+        // Limpiamos la respuesta SOAP para quedarnos solo con el XML del Body
+        if (preg_match('/<loginCmsReturn>([\s\S]*)<\/loginCmsReturn>/', $ta_response, $matches)) {
+            $loginCmsReturn = $matches[1];
+        } else {
+            throw new RuntimeException("WSAA: No se pudo encontrar 'loginCmsReturn' en la respuesta. Respuesta del servidor: " . htmlspecialchars(substr($ta_response, 0, 1000)));
         }
 
-        $credentials = $ta_xml->children('soap', true)->Body->children()->loginCmsResponse->loginCmsReturn;
+        $ta_xml = @simplexml_load_string($loginCmsReturn);
+        if (!$ta_xml) {
+            throw new RuntimeException("WSAA: TA inválido (no XML). Contenido de loginCmsReturn: " . htmlspecialchars($loginCmsReturn));
+        }
         
         $new_ta = [
-            'token'           => (string)$credentials->credentials->token,
-            'sign'            => (string)$credentials->credentials->sign,
-            'generationTime'  => (string)$credentials->header->generationTime,
-            'expirationTime'  => (string)$credentials->header->expirationTime,
+            'token'           => (string)$ta_xml->credentials->token,
+            'sign'            => (string)$ta_xml->credentials->sign,
+            'generationTime'  => (string)$ta_xml->header->generationTime,
+            'expirationTime'  => (string)$ta_xml->header->expirationTime,
         ];
 
         if (!is_dir(dirname($cachePath))) mkdir(dirname($cachePath), 0775, true);
@@ -90,57 +95,44 @@ class WSAAAuth {
                '</loginTicketRequest>';
     }
 
-    /**
-     * Firma el TRA usando el certificado y la clave privada.
-     * **ESTA ES LA VERSIÓN ROBUSTA QUE USA ARCHIVOS TEMPORALES**
-     */
     private function sign_TRA(string $tra_xml): string {
         $certPath = "file://" . realpath($this->certPaths['cert']);
         $keyPath = "file://" . realpath($this->certPaths['key']);
         
-        // Crear archivos temporales para la entrada y salida
         $in_file_path = tempnam(sys_get_temp_dir(), 'TRA_IN_');
         $out_file_path = tempnam(sys_get_temp_dir(), 'TRA_OUT_');
         file_put_contents($in_file_path, $tra_xml);
 
-        $status = openssl_pkcs7_sign(
-            $in_file_path,
-            $out_file_path,
-            $certPath,
-            $keyPath,
-            [], // Sin cabeceras adicionales
-            PKCS7_BINARY | PKCS7_DETACHED
-        );
+        $status = openssl_pkcs7_sign($in_file_path, $out_file_path, $certPath, $keyPath, [], PKCS7_BINARY | PKCS7_DETACHED);
 
-        // Limpiar archivos temporales
         unlink($in_file_path);
 
         if (!$status) {
             unlink($out_file_path);
             $error = "Error al firmar el TRA con OpenSSL.";
-            while ($msg = openssl_error_string()) {
-                $error .= " | " . $msg;
-            }
+            while ($msg = openssl_error_string()) { $error .= " | " . $msg; }
             throw new RuntimeException($error);
         }
 
         $signed_tra_with_headers = file_get_contents($out_file_path);
         unlink($out_file_path);
 
-        // Eliminar las cabeceras para dejar solo la firma CMS
         $parts = explode("\n\n", $signed_tra_with_headers, 2);
-        
-        return $parts[1] ?? '';
+        return base64_encode($parts[1] ?? ''); // Se envía codificado en Base64
     }
 
-    private function call_WSAA(string $cms_body): string {
+    /**
+     * Llama al Web Service de Autenticación (WSAA) de AFIP.
+     * **ESTA FUNCIÓN ESTÁ CORREGIDA**
+     */
+    private function call_WSAA(string $cms_body_base64): string {
         $url = self::WSAA_URLS[$this->env];
         
         $soapReq = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">' .
                      '<soapenv:Header/>' .
                      '<soapenv:Body>' .
                        '<wsaa:loginCms>' .
-                         '<wsaa:in0><![CDATA[' . $cms_body . ']]></wsaa:in0>' .
+                         '<wsaa:in0>' . $cms_body_base64 . '</wsaa:in0>' .
                        '</wsaa:loginCms>' .
                      '</soapenv:Body>' .
                    '</soapenv:Envelope>';
@@ -150,7 +142,12 @@ class WSAAAuth {
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $soapReq,
-            CURLOPT_HTTPHEADER     => ['Content-Type: text/xml; charset=utf-8'],
+            // --- ESTA ES LA CORRECCIÓN CLAVE ---
+            // Se añade la cabecera SOAPAction requerida por el protocolo SOAP 1.1
+            CURLOPT_HTTPHEADER     => [
+                'Content-Type: text/xml; charset=utf-8',
+                'SOAPAction: "loginCms"'
+            ],
             CURLOPT_TIMEOUT        => 30,
         ]);
 
