@@ -10,7 +10,6 @@ function jexit($ok, $data_or_error, int $code = 200) {
     http_response_code($code);
     $payload = ['ok' => $ok];
     if ($ok) {
-        // Para respuestas exitosas, fusionamos el array de datos
         $payload = array_merge($payload, $data_or_error);
     } else {
         $payload['error'] = $data_or_error;
@@ -27,7 +26,7 @@ try {
 
     $branch_id   = (int)($in['branch_id'] ?? $_SESSION['branch_id'] ?? 0);
     $register_id = (int)($in['register_id'] ?? $_SESSION['register_id'] ?? 0);
-    // Leemos 'doc_mode' del frontend pero lo guardaremos en la columna 'doc_type'
+    // Leemos 'doc_mode' del frontend, pero lo guardaremos en la columna 'doc_type'
     $doc_type    = strtoupper(trim((string)($in['doc_mode'] ?? 'TICKET_X')));
     $cbte_letter = in_array($in['cbte_letter'] ?? '', ['A','B','C']) ? $in['cbte_letter'] : null;
     $customer_id = !empty($in['customer_id']) ? (int)$in['customer_id'] : null;
@@ -48,7 +47,6 @@ try {
     }
     $total = round($subtotal, 2);
     
-    // Asumimos 1 punto = $1. Esto puede venir de la configuración.
     $points_value_ratio = 1.0; 
     $points_value = $points_used * $points_value_ratio;
     $total_payable = max(0, $total - $points_value);
@@ -64,6 +62,7 @@ try {
   
     $society = DB::one("SELECT society_id FROM branches WHERE id=?", [$branch_id]);
   
+    // Consulta SQL corregida para usar nombres de columna explícitos y correctos
     DB::run("INSERT INTO sales (society_id, branch_id, register_id, shift_id, user_id, customer_id, doc_type, cbte_letter, total, subtotal, points_used, points_value, created_at, arca_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)",
              [
