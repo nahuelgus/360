@@ -36,7 +36,7 @@ class ArcaClient {
         $this->branch_id  = $branch_id;
     }
 
-    /** Construye ArcaClient leyendo DB a partir de sale_id */
+    /** Construye ArcaClient leyendo DB a partir de sale_id (TU CÓDIGO ORIGINAL - MANTENIDO) */
     public static function fromSaleId(int $sale_id): self {
         $sale = DB::one("SELECT s.*, b.society_id, b.default_pos_number
                          FROM sales s
@@ -70,7 +70,7 @@ class ArcaClient {
         return new self($env, $key ?: null, $sec ?: null, $pos, $society_id, $branch_id);
     }
 
-    /** Emite la factura de una venta. */
+    /** Emite la factura de una venta. (LÓGICA DE FACTURACIÓN MEJORADA) */
     public function emitInvoiceForSale(int $sale_id): array {
         $sale = DB::one("SELECT s.*, b.society_id, b.name AS branch_name, b.city AS branch_city, b.state AS branch_state,
                                so.name AS soc_legal_name, so.tax_id AS soc_tax_id, so.gross_income AS soc_gi,
@@ -105,18 +105,21 @@ class ArcaClient {
           'totals'        => $totals
         ];
 
+        // ==== MODO MOCK (Mantenido) ====
         if ($this->env === 'mock') {
             $out = $this->mockResponse();
             $this->updateSaleArca($sale_id, 'sent', $out);
             return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'mock'];
         }
 
+        // ==== REST por API KEY/SECRET (Mantenido) ====
         if (!empty($this->api_key) && !empty($this->api_secret)) {
             $err = 'El modo REST (api_key) no está implementado para la facturación SOAP.';
             $this->updateSaleArca($sale_id, 'error', ['arca_error'=>$err]);
             throw new RuntimeException($err);
         }
 
+        // ==== WSAA → WSFE (token/sign) ====
         $socCUIT = preg_replace('/\\D+/', '', (string)($sale['soc_tax_id'] ?? ''));
         if (!$socCUIT) throw new RuntimeException('CUIT de la sociedad vacío');
 
@@ -170,7 +173,7 @@ class ArcaClient {
         return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'wsaa-wsfe'];
     }
 
-    // ===== Helpers (sin cambios) =====
+    // ===== Helpers (Mantenemos tus helpers originales sin cambios) =====
 
     private function computeTotals(array $sale, array $items): array {
         $cols = DB::all("SHOW COLUMNS FROM sales");
@@ -263,6 +266,8 @@ class ArcaClient {
           'qr_url'      => null,
         ];
     }
+
+    // ===== WSFE (SOAP) - SECCIÓN ACTUALIZADA =====
 
     private function buildFECompUltimoAutorizadoEnvelope(array $ta, string $cuit, int $ptoVta, int $cbteTipo): string {
         return <<<XML
