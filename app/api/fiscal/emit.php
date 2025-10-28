@@ -19,18 +19,23 @@ try {
   $sale_id = (int)($in['sale_id'] ?? 0);
   if ($sale_id <= 0) jexit(['ok'=>false,'error'=>'sale_id requerido'],422);
 
-  // Traer venta y validar doc_mode
-  $sale = DB::one("SELECT id, doc_mode FROM sales WHERE id=?", [$sale_id]);
+  // ==================================================================
+  // *** ESTA ES LA LÍNEA CORREGIDA ***
+  // Leemos de la columna correcta 'doc_type'
+  $sale = DB::one("SELECT id, doc_type FROM sales WHERE id=?", [$sale_id]);
   if (!$sale) jexit(['ok'=>false,'error'=>'Venta no encontrada'],404);
 
-  $doc_mode = strtoupper((string)($sale['doc_mode'] ?? 'TICKET_X'));
-  if ($doc_mode !== 'INVOICE') jexit(['ok'=>false,'error'=>'La venta no es de tipo Factura'],422);
+  $doc_type = strtoupper((string)($sale['doc_type'] ?? 'TICKET_X'));
+  if ($doc_type !== 'INVOICE') {
+      jexit(['ok'=>false,'error'=>'La venta no es de tipo Factura (es ' . $doc_type . ')'],400);
+  }
+  // ==================================================================
 
-  // Construir cliente y emitir
+  // De aquí en adelante, el flujo es correcto.
   $client = ArcaClient::fromSaleId($sale_id);
-  $res    = $client->emitInvoiceForSale($sale_id);
+  $result = $client->emitInvoiceForSale($sale_id);
 
-  jexit($res, 200);
+  jexit($result, 200);
 
 } catch (Throwable $e) {
   jexit(['ok'=>false,'error'=>$e->getMessage()],500);
