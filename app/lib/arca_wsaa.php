@@ -10,7 +10,6 @@ class WSAAAuth {
     private string $service;
     private array $certPaths;
 
-    // URLs del Web Service de Autenticación y Autorización
     private const WSAA_URLS = [
         'sandbox'    => 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms',
         'production' => 'https://wsaa.afip.gov.ar/ws/services/LoginCms'
@@ -51,8 +50,8 @@ class WSAAAuth {
         $ta_response_encoded_str = $this->call_WSAA($signed_tra_cms);
         
         // ==================================================================
-        // *** ESTA ES LA LÍNEA CORREGIDA FINAL ***
-        // Decodificamos la respuesta de AFIP para convertir &lt; en <, etc.
+        // *** ESTA ES LA CORRECCIÓN FINAL BASADA EN EL MANUAL DE AFIP ***
+        // Decodificamos las entidades HTML (&lt;, &gt;, etc.) para obtener el XML real.
         $ta_response_decoded_str = html_entity_decode($ta_response_encoded_str);
         // ==================================================================
 
@@ -75,10 +74,11 @@ class WSAAAuth {
     }
 
     private function create_TRA(): string {
+        // La especificación técnica indica que la hora debe ser la de Buenos Aires.
         $now = new DateTime('now', new DateTimeZone('America/Argentina/Buenos_Aires'));
         $uniqueId = time();
         $generationTime = $now->format('c');
-        $expirationTime = $now->add(new DateInterval('PT2H'))->format('c');
+        $expirationTime = $now->add(new DateInterval('PT2H'))->format('c'); // Validez de 2 horas
 
         return '<?xml version="1.0" encoding="UTF-8" ?>' .
                '<loginTicketRequest version="1.0">' .
@@ -100,7 +100,6 @@ class WSAAAuth {
         file_put_contents($in_file_path, $tra_xml);
 
         $status = openssl_pkcs7_sign($in_file_path, $out_file_path, $certPath, [$keyPath, ''], [], 0);
-
         unlink($in_file_path);
 
         if (!$status) {
