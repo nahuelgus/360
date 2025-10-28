@@ -47,15 +47,11 @@ class WSAAAuth {
 
         $tra_xml = $this->create_TRA();
         $signed_tra_cms = $this->sign_TRA($tra_xml);
-        $ta_response_encoded_str = $this->call_WSAA($signed_tra_cms);
+        $ta_response_xml_str = $this->call_WSAA($signed_tra_cms);
         
-        // ==================================================================
-        // *** ESTA ES LA CORRECCIÓN FINAL BASADA EN EL MANUAL DE AFIP ***
-        // Decodificamos las entidades HTML (&lt;, &gt;, etc.) para obtener el XML real.
-        $ta_response_decoded_str = html_entity_decode($ta_response_encoded_str);
-        // ==================================================================
-
+        $ta_response_decoded_str = html_entity_decode($ta_response_xml_str);
         $ta_xml = @simplexml_load_string($ta_response_decoded_str);
+
         if (!$ta_xml) {
             throw new RuntimeException("WSAA: TA inválido (no XML). Contenido decodificado: " . htmlspecialchars($ta_response_decoded_str));
         }
@@ -74,11 +70,10 @@ class WSAAAuth {
     }
 
     private function create_TRA(): string {
-        // La especificación técnica indica que la hora debe ser la de Buenos Aires.
         $now = new DateTime('now', new DateTimeZone('America/Argentina/Buenos_Aires'));
         $uniqueId = time();
         $generationTime = $now->format('c');
-        $expirationTime = $now->add(new DateInterval('PT2H'))->format('c'); // Validez de 2 horas
+        $expirationTime = $now->add(new DateInterval('PT2H'))->format('c');
 
         return '<?xml version="1.0" encoding="UTF-8" ?>' .
                '<loginTicketRequest version="1.0">' .
@@ -91,15 +86,27 @@ class WSAAAuth {
                '</loginTicketRequest>';
     }
 
+    /**
+     * Firma el TRA replicando el método de librerías probadas.
+     * **ESTA ES LA VERSIÓN CORREGIDA FINAL**
+     */
     private function sign_TRA(string $tra_xml): string {
-        $certPath = "file://" . realpath($this->certPaths['cert']);
-        $keyPath = "file://" . realpath($this->certPaths['key']);
+        $certPath = realpath($this->certPaths['cert']);
+        $keyPath = realpath($this->certPaths['key']);
         
         $in_file_path = tempnam(sys_get_temp_dir(), 'TRA_IN_');
         $out_file_path = tempnam(sys_get_temp_dir(), 'TRA_OUT_');
         file_put_contents($in_file_path, $tra_xml);
 
-        $status = openssl_pkcs7_sign($in_file_path, $out_file_path, $certPath, [$keyPath, ''], [], 0);
+        $status = openssl_pkcs7_sign(
+            $in_file_path,
+            $out_file_path,
+            'file://' . $certPath,
+            ['file://' . $keyPath, ''], // La contraseña es vacía
+            [],
+            0 // Flag 0 para una firma estándar
+        );
+
         unlink($in_file_path);
 
         if (!$status) {
@@ -109,25 +116,28 @@ class WSAAAuth {
             throw new RuntimeException($error);
         }
 
-        $signed_tra_pem = file_get_contents($out_file_path);
+        $signed_tra_with_headers = file_get_contents($out_file_path);
         unlink($out_file_path);
         
-        if (preg_match('/-----BEGIN PKCS7-----(.*)-----END PKCS7-----/s', $signed_tra_pem, $matches)) {
-            $cms = preg_replace('/\s+/', '', $matches[1]);
-            return $cms;
-        } else {
-            throw new RuntimeException("No se pudo extraer la firma PKCS7 del archivo firmado.");
+        // --- ESTA ES LA CORRECCIÓN CLAVE ---
+        // Se extrae el contenido de la firma (el CMS) cortando las cabeceras
+        $position = strpos($signed_tra_with_headers, "\n\n");
+        if ($position === false) {
+             throw new RuntimeException('No se pudo extraer la firma PKCS7 del archivo firmado (delimitador no encontrado).');
         }
+
+        // Se devuelve solo el contenido de la firma
+        return substr($signed_tra_with_headers, $position + 2);
     }
     
-    private function call_WSAA(string $cms_base64): string {
+    private function call_WSAA(string $cms_body): string {
         $url = self::WSAA_URLS[$this->env];
         
         $soapReq = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">' .
                      '<soapenv:Header/>' .
                      '<soapenv:Body>' .
                        '<wsaa:loginCms>' .
-                         '<wsaa:in0>' . $cms_base64 . '</wsaa:in0>' .
+                         '<wsaa:in0>' . htmlspecialchars($cms_body, ENT_XML1, 'UTF-8') . '</wsaa:in0>' .
                        '</wsaa:loginCms>' .
                      '</soapenv:Body>' .
                    '</soapenv:Envelope>';
