@@ -36,7 +36,7 @@ class ArcaClient {
         $this->branch_id  = $branch_id;
     }
 
-    /** Construye ArcaClient leyendo DB a partir de sale_id (TU CÓDIGO ORIGINAL - MANTENIDO) */
+    /** Construye ArcaClient leyendo DB a partir de sale_id */
     public static function fromSaleId(int $sale_id): self {
         $sale = DB::one("SELECT s.*, b.society_id, b.default_pos_number
                          FROM sales s
@@ -70,7 +70,7 @@ class ArcaClient {
         return new self($env, $key ?: null, $sec ?: null, $pos, $society_id, $branch_id);
     }
 
-    /** Emite la factura de una venta. (LÓGICA DE FACTURACIÓN MEJORADA) */
+    /** Emite la factura de una venta. */
     public function emitInvoiceForSale(int $sale_id): array {
         $sale = DB::one("SELECT s.*, b.society_id, b.name AS branch_name, b.city AS branch_city, b.state AS branch_state,
                                so.name AS soc_legal_name, so.tax_id AS soc_tax_id, so.gross_income AS soc_gi,
@@ -105,36 +105,30 @@ class ArcaClient {
           'totals'        => $totals
         ];
 
-        // ==== MODO MOCK (Mantenido) ====
         if ($this->env === 'mock') {
             $out = $this->mockResponse();
             $this->updateSaleArca($sale_id, 'sent', $out);
             return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'mock'];
         }
 
-        // ==== REST por API KEY/SECRET (Mantenido) ====
         if (!empty($this->api_key) && !empty($this->api_secret)) {
             $err = 'El modo REST (api_key) no está implementado para la facturación SOAP.';
             $this->updateSaleArca($sale_id, 'error', ['arca_error'=>$err]);
             throw new RuntimeException($err);
         }
 
-        // ==== WSAA → WSFE (token/sign) (SECCIÓN ACTUALIZADA Y CORREGIDA) ====
         $socCUIT = preg_replace('/\\D+/', '', (string)($sale['soc_tax_id'] ?? ''));
         if (!$socCUIT) throw new RuntimeException('CUIT de la sociedad vacío');
 
-        // 1) Obtener TA (token/sign) para el servicio 'wsfe'
         $ta = (new WSAAAuth((int)$sale['society_id'], $this->env, 'wsfe'))->getTA();
         
         $wsfeUrl = self::WSFE_URLS[$this->env] ?? null;
         if (!$wsfeUrl) {
-          // Fallback a mock si la URL no está (tu lógica original)
           $out = $this->mockResponse($ta['token'], $ta['sign']);
           $this->updateSaleArca($sale_id, 'sent', $out);
           return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'wsaa-mock'];
         }
 
-        // 2) NUEVO: Obtener último número de comprobante
         $cbteTipo = $this->mapCbteTipo($letter);
         $lastVoucherSoap = $this->buildFECompUltimoAutorizadoEnvelope($ta, $socCUIT, $this->pos_number, $cbteTipo);
         
@@ -143,13 +137,10 @@ class ArcaClient {
         $lastVoucherNum = (int)$this->findTag($lastVoucherResp, 'CbteNro');
         $nextVoucherNum = $lastVoucherNum + 1;
 
-        // 3) Armar FECAESolicitar (SOAP)
         $soapEnv = $this->buildFECAESolicitarEnvelope($ta, $socCUIT, $this->pos_number, $letter, $payload, $nextVoucherNum);
         
-        // 4) Llamar a SOAP
         $soapResp = $this->soapCall($wsfeUrl, $soapEnv, 'http://ar.gov.afip.dif.wsfev1/FECAESolicitar');
 
-        // 5) Parsear respuesta
         $result = $this->findTag($soapResp, 'Resultado');
         if ($result !== 'A') {
              $errors = '';
@@ -179,7 +170,7 @@ class ArcaClient {
         return ['ok'=>true, 'sale_id'=>$sale_id, 'env'=>$this->env, 'data'=>$out, '_mode'=>'wsaa-wsfe'];
     }
 
-    // ===== Helpers (Mantenemos tus helpers originales) =====
+    // ===== Helpers (sin cambios) =====
 
     private function computeTotals(array $sale, array $items): array {
         $cols = DB::all("SHOW COLUMNS FROM sales");
@@ -273,8 +264,6 @@ class ArcaClient {
         ];
     }
 
-    // ===== WSFE (SOAP) - SECCIÓN ACTUALIZADA =====
-
     private function buildFECompUltimoAutorizadoEnvelope(array $ta, string $cuit, int $ptoVta, int $cbteTipo): string {
         return <<<XML
 <soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope" xmlns:ar="http://ar.gov.afip.dif.wsfev1/">
@@ -360,7 +349,6 @@ XML;
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $envelope,
             CURLOPT_HTTPHEADER     => [
-                // Corregido para SOAP 1.2
                 'Content-Type: application/soap+xml; charset=utf-8',
                 "Action: {$action}" 
             ],
