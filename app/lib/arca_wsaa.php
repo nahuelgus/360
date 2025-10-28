@@ -10,6 +10,7 @@ class WSAAAuth {
     private string $service;
     private array $certPaths;
 
+    // URLs del Web Service de Autenticación y Autorización
     private const WSAA_URLS = [
         'sandbox'    => 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms',
         'production' => 'https://wsaa.afip.gov.ar/ws/services/LoginCms'
@@ -47,11 +48,11 @@ class WSAAAuth {
 
         $tra_xml = $this->create_TRA();
         $signed_tra_cms = $this->sign_TRA($tra_xml);
-        $ta_response_xml = $this->call_WSAA($signed_tra_cms);
+        $ta_response_xml_str = $this->call_WSAA($signed_tra_cms);
         
-        $ta_xml = @simplexml_load_string($ta_response_xml);
+        $ta_xml = @simplexml_load_string($ta_response_xml_str);
         if (!$ta_xml) {
-            throw new RuntimeException("WSAA: TA inválido (no XML). Contenido de loginCmsReturn: " . htmlspecialchars($ta_response_xml));
+            throw new RuntimeException("WSAA: TA inválido (no XML). Contenido de loginCmsReturn: " . htmlspecialchars($ta_response_xml_str));
         }
 
         $new_ta = [
@@ -84,6 +85,10 @@ class WSAAAuth {
                '</loginTicketRequest>';
     }
 
+    /**
+     * Firma el TRA replicando el método del cliente oficial de AFIP.
+     * **ESTA ES LA VERSIÓN CORREGIDA FINAL**
+     */
     private function sign_TRA(string $tra_xml): string {
         $certPath = "file://" . realpath($this->certPaths['cert']);
         $keyPath = "file://" . realpath($this->certPaths['key']);
@@ -92,8 +97,8 @@ class WSAAAuth {
         $out_file_path = tempnam(sys_get_temp_dir(), 'TRA_OUT_');
         file_put_contents($in_file_path, $tra_xml);
 
-        // La contraseña de la clave privada es vacía
-        $status = openssl_pkcs7_sign($in_file_path, $out_file_path, $certPath, [$keyPath, ''], [], PKCS7_DETACHED);
+        // Se firma con la clave privada (asumiendo que no tiene contraseña) y sin flags extra
+        $status = openssl_pkcs7_sign($in_file_path, $out_file_path, $certPath, [$keyPath, ''], [], 0);
 
         unlink($in_file_path);
 
@@ -104,23 +109,27 @@ class WSAAAuth {
             throw new RuntimeException($error);
         }
 
-        $signed_tra_with_headers = file_get_contents($out_file_path);
+        $signed_tra_pem = file_get_contents($out_file_path);
         unlink($out_file_path);
         
-        // Extraemos solo el contenido de la firma (el CMS)
-        $parts = explode("\n\n", $signed_tra_with_headers, 2);
-        
-        return $parts[1] ?? '';
+        // Se extrae el contenido Base64 entre los marcadores BEGIN/END, como en el cliente oficial
+        if (preg_match('/-----BEGIN PKCS7-----(.*)-----END PKCS7-----/s', $signed_tra_pem, $matches)) {
+            // Se eliminan todos los espacios en blanco (saltos de línea, etc.) del Base64
+            $cms = preg_replace('/\s+/', '', $matches[1]);
+            return $cms;
+        } else {
+            throw new RuntimeException("No se pudo extraer la firma PKCS7 del archivo firmado.");
+        }
     }
     
-    private function call_WSAA(string $cms_body): string {
+    private function call_WSAA(string $cms_base64): string {
         $url = self::WSAA_URLS[$this->env];
         
         $soapReq = '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wsaa="http://wsaa.view.sua.dvadac.desein.afip.gov">' .
                      '<soapenv:Header/>' .
                      '<soapenv:Body>' .
                        '<wsaa:loginCms>' .
-                         '<wsaa:in0><![CDATA[' . $cms_body . ']]></wsaa:in0>' .
+                         '<wsaa:in0>' . $cms_base64 . '</wsaa:in0>' .
                        '</wsaa:loginCms>' .
                      '</soapenv:Body>' .
                    '</soapenv:Envelope>';
@@ -151,7 +160,7 @@ class WSAAAuth {
             throw new RuntimeException("WSAA HTTP {$http_code} " . htmlspecialchars($response));
         }
 
-        // Extraemos el contenido de la respuesta para devolver el XML limpio
+        // Se extrae el contenido de la respuesta para devolver el XML limpio
         if (preg_match('/<loginCmsReturn>([\s\S]*)<\/loginCmsReturn>/', $response, $matches)) {
             return $matches[1];
         }
